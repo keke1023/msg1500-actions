@@ -11,11 +11,17 @@
 #       * 该时点 lede ramips 内核 5.10 默认 + 5.4 并行支持，
 #         驱动同时兼容 5.4 / 5.10 —— 与 ImmortalWrt 21.02 的 5.4 内核匹配
 #       * 避开 lede master 当前的 6.18 大迁移（不稳定根源）
+#   - 包名事实：mt7615d 是内核模块包，Makefile 用 `define KernelPackage/mt7615d`，
+#     生成的 feed 包名 = `kmod-mt7615d`（PKG_NAME:=mt7615d 只是内部名）。
+#     另有 `kmod-mt7615d_dbdc`，但它 DEPENDS +maccalc，而 21.02 无 maccalc -> 不能用，
+#     故 DBDC 双频改为在 .config 里直接 set 其 config 块 select 的 MTK_* 选项。
+#   - mt7615d 编译依赖 mac80211 头文件（-I .../mac80211-backport/...），
+#     故必须显式保留 kmod-mac80211（开源 kmod-mt7615e 原本会带入，换闭源后易丢）。
 #
 # 动作：
 #   1. sparse 拉取 lede@LEDE_PIN 的 package/lean/mt -> openwrt/package/lean/mt
 #   2. 把 MSG1500 X.00 的 DEVICE_PACKAGES：
-#        kmod-mt7615e kmod-mt7615-firmware  ->  kmod-mt7615d luci-app-mtwifi
+#        kmod-mt7615e kmod-mt7615-firmware  ->  kmod-mt7615d kmod-mt7615-firmware luci-app-mtwifi kmod-mac80211
 set -euo pipefail
 cd "$(dirname "$0")/../openwrt"
 LEDE_PIN="${LEDE_PIN:-e69815120ad5d1b5e9b1aa4c98d69e6ce6e8f3b4}"
@@ -33,17 +39,26 @@ mkdir -p package/lean
 rm -rf package/lean/mt
 cp -r /tmp/lede-src/package/lean/mt package/lean/mt
 
-echo "[*] 校验闭源驱动包存在"
-if ! grep -q "Package/kmod-mt7615d" package/lean/mt/drivers/mt7615d/Makefile; then
-  echo "!! 未在 package/lean/mt 中找到 kmod-mt7615d，lede 布局可能已变化。现有驱动包："
+echo "[*] 校验闭源驱动包存在（内核模块包，PKG_NAME:=mt7615d）"
+if ! grep -q "PKG_NAME:=mt7615d" package/lean/mt/drivers/mt7615d/Makefile; then
+  echo "!! 未在 package/lean/mt 中找到 mt7615d，lede 布局可能已变化。现有驱动包："
   grep -h "^PKG_NAME" package/lean/mt/drivers/*/Makefile || true
   exit 1
 fi
+if [ ! -d package/lean/mt/luci-app-mtwifi ]; then
+  echo "!! 未找到 package/lean/mt/luci-app-mtwifi"
+  exit 1
+fi
 
-echo "[*] 替换 MSG1500 X.00 无线驱动（kmod-mt7615e -> kmod-mt7615d + luci-app-mtwifi）"
+echo "[*] 替换 MSG1500 X.00 无线驱动（kmod-mt7615e -> kmod-mt7615d + luci-app-mtwifi + kmod-mac80211）"
 sed -i \
-  '/define Device\/raisecom_msg1500-x-00/,/^endef/ s/kmod-mt7615e kmod-mt7615-firmware/kmod-mt7615d luci-app-mtwifi/' \
+  '/define Device\/raisecom_msg1500-x-00/,/^endef/ s/kmod-mt7615e kmod-mt7615-firmware/kmod-mt7615d kmod-mt7615-firmware luci-app-mtwifi kmod-mac80211/' \
   target/linux/ramips/image/mt7621.mk
+
+if ! grep -q "kmod-mt7615d" target/linux/ramips/image/mt7621.mk; then
+  echo "!! sed 未能替换 DEVICE_PACKAGES，请检查 mt7621.mk 中 MSG1500 的设备定义"
+  exit 1
+fi
 
 echo "[*] 修改后的设备定义："
 sed -n '/define Device\/raisecom_msg1500-x-00/,/^endef/p' target/linux/ramips/image/mt7621.mk
