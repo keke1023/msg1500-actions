@@ -12,7 +12,7 @@
 | MSG1500 X.00 机型 | 设备名 `raisecom_msg1500-x-00`（21.02 原生支持，NAND 128M） |
 | MT7615 闭源驱动 | 从 `coolsnowwolf/lede` 固定 commit `e698151`（2023-04-02）提取 `package/lean/mt`，并把设备 `DEVICE_PACKAGES` 里的 `kmod-mt7615e` 换成 `kmod-mt7615d + luci-app-mtwifi` |
 | 剔除所有 rust | 物理删除 helloworld 里的 `shadowsocks-rust` / `dns2socks-rust` / `shadow-tls` 三个包，配置里双保险关闭，编译前校验兜底 |
-| 升级 golang | 用 `openwrt/packages master` 的 `lang/golang`（**Go 1.27**）覆盖 21.02 feed 自带的 1.19 |
+| 升级 golang | 用 `openwrt/packages openwrt-23.05` 的 `lang/golang`（**Go 1.21.13**，旧式单版本布局）覆盖 21.02 feed 自带的 1.19 |
 | luci-app-ngrokc | immortalwrt 21.02 luci/packages feed 原生有，直接勾选 |
 | luci-app-frpc | immortalwrt 21.02 原生有（frp 0.51.2，Go 编译，兼容新 golang） |
 
@@ -27,8 +27,8 @@ immortalwrt/packages feed 的 kernel 目录里都只有开源 mt76，luci feed �
 
 ```
 ImmortalWrt 21.02（稳定底座）
-  + helloworld master（feed）
-  + openwrt/packages master 的 golang 1.27（覆盖 1.19）
+  + helloworld master（feed，xray-core 在 25-patch-xray.sh 中降级到 v24.12.31）
+  + openwrt/packages openwrt-23.05 的 golang 1.21.13（旧式单版本布局，覆盖 1.19）
   + lede@e698151 的 package/lean/mt（闭源驱动，与内核 5.4 同代）
   - 全部 rust 包
 ```
@@ -64,21 +64,27 @@ lede ramips 同时支持内核 5.4/5.10，驱动与 ImmortalWrt 21.02 的 5.4 �
 ├── config/msg1500-x00.config     # 种子配置（defconfig 自动补全）
 └── scripts/
     ├── 10-add-feeds.sh           # 追加 helloworld master feed，feeds update
-    ├── 20-golang-upgrade.sh      # golang 1.19 → 1.27（openwrt/packages master 覆盖）
+    ├── 20-golang-upgrade.sh      # golang 1.19 → 1.21.13（openwrt/packages 23.05 覆盖）
+    ├── 25-patch-xray.sh          # 把 xray-core 26.5.9 降到 v24.12.31（匹配 23.05 golang）
     ├── 30-remove-rust.sh         # 物理剔除 3 个 rust 包（缺一即报错退出）
     └── 40-mt7615d.sh             # 从 lede@e698151 提取闭源驱动 + 替换设备驱动包
 ```
 
-脚本顺序刻意安排为 **update → golang 覆盖 → 删 rust → 注入驱动 → feeds install -a → defconfig**，
+脚本顺序刻意安排为 **update → golang 覆盖 → xray 降级 → 删 rust → 注入驱动 → feeds install -a → defconfig**，
 让 install 与 defconfig 看到的都是"改造后"的 feed。
 
 ## 关键技术点
 
-- **golang 覆盖的兼容性**：openwrt/packages master 的新版 lang/golang 带 `golang` 虚拟包
-  （`HOST_BUILD_DEPENDS:=golang1.27/host`），所以 21.02 feed 里老包（frp 等）的
-  `PKG_BUILD_DEPENDS:=golang/host` 写法继续可用；`golang-package.mk` 保留了
-  `GoBinPackage`/`GO_PKG` 等老 API。xray-core 26.x 的 go.mod 要求 go ≥ 1.26 且
-  `GOTOOLCHAIN=local` 禁止自动下载工具链，1.19/1.21/1.23 都不够，必须上 1.27。
+- **golang 覆盖的兼容性（重要踩坑）**：openwrt/packages 的 **master** 分支 lang/golang 是
+  **多版本布局**（`golang-bootstrap` + `golang1.27` + `golang-host-build.mk`），其 host go
+  机制与 21.02 feed 里老包（frp / ngrokc）的 `PKG_BUILD_DEPENDS:=golang/host` **不兼容**——
+  host go 不会落到 PATH，编译时直接 `go: command not found`（已实测翻车）。
+  **必须用旧式单版本布局的分支**：`openwrt-23.05`（Go 1.21.13）或 `openwrt-24.10`（Go 1.23.12），
+  这两个分支的 `golang/host` 写法与 21.02 buildroot 完全兼容。
+- **golang 版本与 xray 的硬约束**：xray-core 26.x 的 go.mod 要求 go ≥ 1.26；23.05（1.21）/
+  24.10（1.23）都编不动 26.x。本项目取 **23.05 golang（1.21）+ xray-core 降级到 v24.12.31
+  （go 1.21.4，24.x 末版，功能无损）** 这一最稳组合。若改用 24.10 golang（1.23），则 xray 可升到
+  v25.2.21（go 1.23）；master golang 不可用（布局不兼容）。
 - **rust 判定**：不只按目录名，还 grep Makefile 里的 `rust-package.mk` / `rust/host` /
   `Cargo.toml` 标记（`shadow-tls` 就是靠这个抓出来的——它名字里没有 rust）。
   `luci-app-ssr-plus` 本体只在可选项里提到 rust 包名，有白名单保护不会被误删。
@@ -90,7 +96,7 @@ lede ramips 同时支持内核 5.4/5.10，驱动与 ImmortalWrt 21.02 的 5.4 �
 | 风险 | 概率 | 回退 |
 |---|---|---|
 | mt7615d（lede 2023 版）在 iwrt 21.02 内核 5.4 上编译失败 | 中 | workflow 里选 `mt7615e` 开源模式重跑（其余逻辑不变） |
-| golang 1.27 与 21.02 构建系统 / 老包不兼容 | 低-中 | `env.GOLANG_REF` 改为 `openwrt-24.10`（Go 1.23）——但需同时把 helloworld 的 xray-core 降级（1.23 编不了 xray 26.x） |
+| golang 与 21.02 构建系统 / 老包不兼容 | 已规避 | 已锁定 `openwrt-23.05`（Go 1.21.13，旧式单版本布局），与 frp/ngrokc 的 `golang/host` 老写法兼容；**不要切回 master**（多版本布局会 `go: command not found`）。 |
 | helloworld master 后续跟进新内核 API，某包在 5.4 上编译失败 | 随时间上升 | 定位失败包后在该包 Makefile 钉旧版本号，或 feeds.conf 里把 helloworld 换成其旧 tag |
 | ubuntu-22.04 host gcc 11 编内核 5.4 报编译警告/错误 | 低 | job 上加 `container: debian:11` |
 
