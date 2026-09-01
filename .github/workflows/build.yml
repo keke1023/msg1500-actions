@@ -85,9 +85,12 @@ jobs:
             echo "CONFIG_PACKAGE_kmod-mt7615e=y" >> .config
             echo "CONFIG_PACKAGE_kmod-mt7615-firmware=y" >> .config
           fi
-          # 强制 host node 用 v18（python3 + gcc11 兼容），绕开 lede 默认 v12 的 py2 死穴
+          # 强制 host node 用 v18（python3 + gcc11 兼容），绕开 lede 默认 v12 的 py2 死穴          make defconfig
+          # 强制 host node 用 v18（python3 编译，绕开 mipsel 下 lede 默认 v12 的 py2 死穴）
+          # 关键：必须在 make defconfig 之后写死——defconfig 会因 mipsel 的 choice default 回落到 NODEJS_12
+          sed -i '/CONFIG_NODEJS_1[0-9]=y/d; /CONFIG_NODEJS_2[0-9]=y/d' .config
           echo "CONFIG_NODEJS_18=y" >> .config
-          make defconfig
+
           # 双保险：闭源模式下确保开源驱动符号不存在（避免与 mt7615d 冲突）
           if [ "${{ github.event.inputs.wifi_driver }}" != "mt7615e" ]; then
             sed -i '/CONFIG_PACKAGE_kmod-mt7615e=/d' .config
