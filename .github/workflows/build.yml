@@ -54,9 +54,8 @@ jobs:
 
       - name: 拉取 coolsnowwolf/lede @ ${{ env.LEDE_TAG }}
         run: |
-          git clone --depth 1 https://github.com/coolsnowwolf/lede.git openwrt
-          git -C openwrt fetch --depth 1 origin "$LEDE_TAG"
-          git -C openwrt checkout "$LEDE_TAG"
+          # 直接 -b 指定 tag 克隆，一步到位（避免 clone master 后再 fetch/checkout tag 因浅克隆无本地 ref 而失败）
+          git clone -b "$LEDE_TAG" --depth 1 https://github.com/coolsnowwolf/lede.git openwrt
           git -C openwrt log -1 --format="lede HEAD: %H %cd" --date=iso
 
       - name: 启用 helloworld(master) feed
