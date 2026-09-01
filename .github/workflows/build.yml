@@ -102,6 +102,16 @@ jobs:
           done
           # 通配兜底：清掉 ddns/vsftpd 全系列变体（ddns-scripts_*, luci-app-ddns-* 等）
           sed -i '/^CONFIG_PACKAGE_.*ddns.*=y/d; /^CONFIG_PACKAGE_.*vsftpd.*=y/d' .config
+          # libustream TLS 后端二选一：luci-ssl 会拉入 openssl 后端，但 lede defconfig 默认还补了
+          # mbedtls 后端，两者都提供同名文件 lib/libustream-ssl.so → 打包 rootfs 时 file clash。
+          # 保留已选中的那一个、删除另一个，避免冲突（去掉 luci-ssl 会自动倒向 mbedtls）。
+          if grep -q "^CONFIG_PACKAGE_libustream-openssl" .config; then
+            sed -i '/^CONFIG_PACKAGE_libustream-mbedtls.*=y/d' .config
+            echo "# CONFIG_PACKAGE_libustream-mbedtls20201210 is not set" >> .config
+          else
+            sed -i '/^CONFIG_PACKAGE_libustream-openssl.*=y/d' .config
+            echo "# CONFIG_PACKAGE_libustream-openssl20201210 is not set" >> .config
+          fi
 
           # 双保险：闭源模式下确保开源驱动符号不存在（避免与 mt7615d 冲突）
           if [ "${{ github.event.inputs.wifi_driver }}" != "mt7615e" ]; then
