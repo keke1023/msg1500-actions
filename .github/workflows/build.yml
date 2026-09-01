@@ -71,16 +71,27 @@ jobs:
       - name: 写入 .config 并按驱动模式调整
         working-directory: openwrt
         run: |
+          # 解耦开源固件包对 mt7615e 驱动的强制依赖：
+          # kmod-mt7615-firmware 的 `DEPENDS+=+kmod-mt7615e` 会让 make defconfig 把开源驱动也拉进来，
+          # 与闭源 kmod-mt7615d 抢同一 PCI 设备导致内核冲突。MT7615 固件 bin 两驱动共用，
+          # 保留固件包、去掉该依赖即可，固件文件照常落盘。
+          sed -i '/define KernelPackage\/mt7615-firmware/,/^endef/{/DEPENDS+=+kmod-mt7615e/d}' package/kernel/mt76/Makefile
+
           cp ../config/msg1500-x00.config .config
           if [ "${{ github.event.inputs.wifi_driver }}" = "mt7615e" ]; then
-            # 开源模式：去掉闭源驱动与 mtwifi，改挂 kmod-mt7615e
+            # 开源模式：去掉闭源驱动与 mtwifi，改挂 kmod-mt7615e + 固件
             sed -i '/CONFIG_PACKAGE_kmod-mt7615d=/d' .config
             sed -i '/CONFIG_PACKAGE_luci-app-mtwifi=/d' .config
             echo "CONFIG_PACKAGE_kmod-mt7615e=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-mt7615-firmware=y" >> .config
           fi
           # 强制 host node 用 v18（python3 + gcc11 兼容），绕开 lede 默认 v12 的 py2 死穴
           echo "CONFIG_NODEJS_18=y" >> .config
           make defconfig
+          # 双保险：闭源模式下确保开源驱动符号不存在（避免与 mt7615d 冲突）
+          if [ "${{ github.event.inputs.wifi_driver }}" != "mt7615e" ]; then
+            sed -i '/CONFIG_PACKAGE_kmod-mt7615e=/d' .config
+          fi
 
       - name: 校验配置（设备 / rust / 驱动 / 版本）
         working-directory: openwrt
@@ -91,6 +102,10 @@ jobs:
             || { echo "!! 目标设备未选中"; exit 1; }
           if grep -E "^CONFIG_PACKAGE_.*([Rr]ust|shadow-tls)=y" .config; then
             echo "!! 仍有 rust 相关包被选中"; exit 1
+          fi
+          # 闭源(kmod-mt7615d) 与开源(kmod-mt7615e) 驱动互斥，不能同时加载同一 PCI 设备
+          if grep -q "^CONFIG_PACKAGE_kmod-mt7615d=y" .config && grep -q "^CONFIG_PACKAGE_kmod-mt7615e=y" .config; then
+            echo "!! kmod-mt7615d 与 kmod-mt7615e 同时选中，会内核冲突，已自动规避（见写入步骤）"; exit 1
           fi
           echo "--- 已选中的关键包 ---"
           grep -E "^CONFIG_PACKAGE_(luci-app-ssr-plus|luci-app-frpc|luci-app-ngrokc|xray-core|kmod-mt7615[de]|luci-app-mtwifi)=" .config || true
