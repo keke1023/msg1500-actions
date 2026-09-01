@@ -50,13 +50,31 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
             gettext git libncurses5-dev libssl-dev python3-distutils python3-setuptools \
-            rsync swig unzip zlib1g-dev file wget curl ca-certificates
+            rsync swig unzip zlib1g-dev file wget curl ca-certificates ccache
+          # 初始化 ccache（缓存上限，避免无界增长；store 路径由 OpenWrt 固定为 staging_dir/host/ccache）
+          ccache --max-size=5G >/dev/null 2>&1 || true
 
       - name: 拉取 coolsnowwolf/lede @ ${{ env.LEDE_TAG }}
         run: |
           # 直接 -b 指定 tag 克隆，一步到位（避免 clone master 后再 fetch/checkout tag 因浅克隆无本地 ref 而失败）
           git clone -b "$LEDE_TAG" --depth 1 https://github.com/coolsnowwolf/lede.git openwrt
           git -C openwrt log -1 --format="lede HEAD: %H %cd" --date=iso
+
+      - name: 恢复下载缓存 (dl)
+        uses: actions/cache@v4
+        with:
+          path: openwrt/dl
+          key: dl-msg1500-${{ env.LEDE_TAG }}
+          restore-keys: |
+            dl-msg1500-
+
+      - name: 恢复 ccache 缓存
+        uses: actions/cache@v4
+        with:
+          path: openwrt/staging_dir/host/ccache
+          key: ccache-msg1500-${{ env.LEDE_TAG }}
+          restore-keys: |
+            ccache-msg1500-
 
       - name: 启用 helloworld(master) feed
         run: bash scripts/10-add-feeds.sh
@@ -92,6 +110,7 @@ jobs:
           # 必须在 defconfig 之后写死，否则会被 choice default 覆盖回 v12
           sed -i '/CONFIG_NODEJS_1[0-9]=y/d; /CONFIG_NODEJS_2[0-9]=y/d' .config
           echo "CONFIG_NODEJS_22=y" >> .config   # v22.23.0：满足 frp 0.70.1 前端 Vite7 (需 Node 20.19+/22.12+)，且 python3/host 不踩 py2
+          echo "CONFIG_CCACHE=y" >> .config      # 启用编译器缓存，配合 workflow 的 ccache 缓存让重编大幅提速
 
           # 精简 lede 默认/误勾的无关包（基准测试、动态 DNS、FTP 服务等）
           # 这些不在 seed config 里，是 make defconfig 后 lede 默认补进来的；按需增删 DROP_PKGS 即可
@@ -103,14 +122,15 @@ jobs:
           # 通配兜底：清掉 ddns/vsftpd 全系列变体（ddns-scripts_*, luci-app-ddns-* 等）
           sed -i '/^CONFIG_PACKAGE_.*ddns.*=y/d; /^CONFIG_PACKAGE_.*vsftpd.*=y/d' .config
           # libustream TLS 后端互斥：openssl / mbedtls / wolfssl 都提供同名文件
-          # lib/libustream-ssl.so，只能留一个。luci-ssl 依赖 openssl 后端 → 清掉其余后端，确保 openssl 唯一。
-          sed -i '/^CONFIG_PACKAGE_libustream-mbedtls.*=y/d' .config
-          echo "# CONFIG_PACKAGE_libustream-mbedtls20201210 is not set" >> .config
+          # lib/libustream-ssl.so，只能留一个。已确认 luci-ssl 依赖 mbedtls 后端（不是 openssl），
+          # 故保留 mbedtls、清掉 openssl 与 wolfssl（openssl 后端是 make defconfig 默认补的冗余项，非 luci-ssl 所需）。
+          sed -i '/^CONFIG_PACKAGE_libustream-openssl.*=y/d' .config
+          echo "# CONFIG_PACKAGE_libustream-openssl20201210 is not set" >> .config
           sed -i '/^CONFIG_PACKAGE_libustream-wolfssl.*=y/d' .config
           echo "# CONFIG_PACKAGE_libustream-wolfssl20201210 is not set" >> .config
-          # 显式锁定 openssl 后端（luci-ssl 所需），防止被 silentoldconfig 清掉
-          sed -i '/^CONFIG_PACKAGE_libustream-openssl.*=y/d' .config
-          echo "CONFIG_PACKAGE_libustream-openssl20201210=y" >> .config
+          # 显式锁定 mbedtls 后端（luci-ssl 所需），防止被 silentoldconfig 清掉
+          sed -i '/^CONFIG_PACKAGE_libustream-mbedtls.*=y/d' .config
+          echo "CONFIG_PACKAGE_libustream-mbedtls20201210=y" >> .config
 
           # 双保险：闭源模式下确保开源驱动符号不存在（避免与 mt7615d 冲突）
           if [ "${{ github.event.inputs.wifi_driver }}" != "mt7615e" ]; then
