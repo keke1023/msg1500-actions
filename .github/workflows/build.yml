@@ -23,8 +23,13 @@ env:
   IWRT_BRANCH: openwrt-21.02
   HELLOWORLD_BRANCH: master
   # openwrt/packages 的分支，lang/golang 取自这里。
-  # master = Go 1.27（xray-core 26.x 要求 go >= 1.26 且 GOTOOLCHAIN=local）
-  GOLANG_REF: master
+  # 必须用“旧式单版本布局”的分支（23.05 / 24.10），不能用 master：
+  #   - master 是多版本布局（golang-bootstrap + golang1.27），其 host go 机制与
+  #     21.02 feed 里 frp/ngrokc 的“PKG_BUILD_DEPENDS:=golang/host”老写法不兼容，
+  #     会导致 go: command not found（已实测翻车）。
+  #   - 23.05 的 Go 1.21.13 与 21.02 buildroot 同代，frp/ngrokc/xray 均兼容。
+  # 由于降到 23.05 golang，xray-core 需同步降到 go 1.21 兼容版（见 25-patch-xray.sh）。
+  GOLANG_REF: openwrt-23.05
   # coolsnowwolf/lede 固定 commit（2023-04-02）：
   # package/lean/mt 含 drivers/mt7615d + luci-app-mtwifi，兼容内核 5.4/5.10，
   # 与 ImmortalWrt 21.02 的 ramips 5.4 内核同代
@@ -64,8 +69,11 @@ jobs:
       - name: 添加 helloworld feed (master)
         run: bash scripts/10-add-feeds.sh
 
-      - name: 升级 golang (openwrt/packages master → Go 1.27)
+      - name: 升级 golang (openwrt/packages 23.05 → Go 1.21.13)
         run: bash scripts/20-golang-upgrade.sh
+
+      - name: 降级 xray-core → v24.12.31（匹配 23.05 golang 1.21）
+        run: bash scripts/25-patch-xray.sh
 
       - name: 剔除 rust 相关包
         run: bash scripts/30-remove-rust.sh
@@ -96,7 +104,7 @@ jobs:
           echo "--- 已选中的关键包 ---"
           grep -E "^CONFIG_PACKAGE_(luci-app-ssr-plus|luci-app-frpc|luci-app-ngrokc|xray-core|kmod-mt7615[de]|luci-app-mtwifi)=" .config || true
           echo "--- golang 版本 ---"
-          grep -m1 "GO_DEFAULT_VERSION" feeds/packages/lang/golang/golang-values.mk
+          grep -E "GO_VERSION_MAJOR_MINOR|GO_DEFAULT_VERSION" feeds/packages/lang/golang/golang-values.mk || true
           echo "--- xray-core 版本 ---"
           grep -m1 "^PKG_VERSION" feeds/helloworld/xray-core/Makefile || true
 
