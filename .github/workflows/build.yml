@@ -78,6 +78,8 @@ jobs:
             sed -i '/CONFIG_PACKAGE_luci-app-mtwifi=/d' .config
             echo "CONFIG_PACKAGE_kmod-mt7615e=y" >> .config
           fi
+          # 强制 host node 用 v18（python3 + gcc11 兼容），绕开 lede 默认 v12 的 py2 死穴
+          echo "CONFIG_NODEJS_18=y" >> .config
           make defconfig
 
       - name: 校验配置（设备 / rust / 驱动 / 版本）
