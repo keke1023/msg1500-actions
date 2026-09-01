@@ -85,13 +85,13 @@ jobs:
             echo "CONFIG_PACKAGE_kmod-mt7615e=y" >> .config
             echo "CONFIG_PACKAGE_kmod-mt7615-firmware=y" >> .config
           fi
-          # 生成完整 .config（defconfig 会补上 lede 默认包，也会把 mipsel 的 NODEJS choice 重置回 v12）
+          # 生成完整 .config（defconfig 会把 mipsel 的 NODEJS choice 重置回 v12；下面强制改到 v22 以满足 frp 0.70.1 前端 Vite7）
           make defconfig
 
           # 强制 host node 用 v18（python3 编译，绕开 mipsel 下 lede 默认 v12 的 py2 死穴）
           # 必须在 defconfig 之后写死，否则会被 choice default 覆盖回 v12
           sed -i '/CONFIG_NODEJS_1[0-9]=y/d; /CONFIG_NODEJS_2[0-9]=y/d' .config
-          echo "CONFIG_NODEJS_18=y" >> .config
+          echo "CONFIG_NODEJS_22=y" >> .config   # v22.23.0：满足 frp 0.70.1 前端 Vite7 (需 Node 20.19+/22.12+)，且 python3/host 不踩 py2
 
           # 精简 lede 默认/误勾的无关包（基准测试、动态 DNS、FTP 服务等）
           # 这些不在 seed config 里，是 make defconfig 后 lede 默认补进来的；按需增删 DROP_PKGS 即可
